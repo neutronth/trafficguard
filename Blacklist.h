@@ -6,7 +6,11 @@
 #include <memory>
 #include <vector>
 #include <pcrecpp.h>
+#include <condition_variable>
+#include <mutex>
+#include <boost/lockfree/queue.hpp>
 #include <atscppapi/Logger.h>
+#include <atscppapi/TransactionPlugin.h>
 
 using namespace atscppapi;
 using namespace pcrecpp;
@@ -14,6 +18,10 @@ using std::string;
 using std::atomic;
 using std::shared_ptr;
 using std::vector;
+using std::unique_lock;
+using std::mutex;
+using std::condition_variable;
+using boost::lockfree::queue;
 
 namespace TrafficGuard
 {
@@ -71,22 +79,32 @@ BlacklistCategory::~BlacklistCategory ()
   tg_log.logDebug ("Category: %s destroyed", name_.c_str ());
 }
 
+typedef void (*matchCallback) (Transaction &, string);
+
 class Blacklist
 {
 public:
-  Blacklist (string base_path, atomic<bool> *ready);
+  Blacklist (string base_path, atomic<bool> *ready, matchCallback cb,
+             int workers);
   ~Blacklist ();
 
   void LoadPatterns ();
-  bool Match (string domain, string url, string &ret_category);
+  bool MatchQueueAdd (Transaction &transaction);
 
 private:
   void ReloadPatterns ();
+  void MatchWorker (int id);
+  bool Match (string domain, string url, string &ret_category);
 
 private:
   string        base_path_;
   atomic<bool> *ready_;
   vector<shared_ptr<BlacklistCategory>> categories_;
+  mutex              worker_mtx_;
+  condition_variable worker_cv_;
+  atomic<int>        worker_queue_size_;
+  queue<const Transaction *> worker_queue_;
+  matchCallback      match_callback_;
 };
 
 inline

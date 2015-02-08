@@ -65,6 +65,15 @@ TrafficGuardTransactionPlugin::handleSendResponseHeaders (Transaction &transacti
   transaction.resume ();
 }
 
+static
+void
+blacklistMatchCallback (Transaction &transaction, string blacklist_categories)
+{
+  transaction.addPlugin (new TrafficGuardTransactionPlugin (transaction,
+                         config_root["LandingPage"].asString (),
+                         blacklist_categories));
+}
+
 class TrafficGuardGlobalPlugin : public GlobalPlugin
 {
 public:
@@ -73,7 +82,9 @@ public:
       base_path_ ("/etc/trafficguard/blacklists"),
       ready_ (false)
   {
-    blacklist_ = make_shared<Blacklist> (base_path_, &ready_);
+    blacklist_ = make_shared<Blacklist> (base_path_, &ready_,
+                                         &blacklistMatchCallback,
+                                         config_root["Workers"].asInt ());
     registerHook (HOOK_SEND_REQUEST_HEADERS);
   }
 
@@ -90,19 +101,8 @@ TrafficGuardGlobalPlugin::handleSendRequestHeaders (Transaction &transaction)
 {
   string blacklist_categories;
 
-  if (ready_ &&
-      blacklist_->Match (
-        transaction.getClientRequest ().getUrl ().getHost (),
-        transaction.getClientRequest ().getUrl ().getUrlString (),
-        blacklist_categories))
-    {
-      transaction.addPlugin (new TrafficGuardTransactionPlugin (transaction,
-                               config_root["LandingPage"].asString (),
-                               blacklist_categories));
-      return;
-    }
-
-  transaction.resume ();
+  if (!ready_ || !blacklist_->MatchQueueAdd (transaction))
+    transaction.resume ();
 }
 
 static bool
@@ -120,6 +120,9 @@ readConfig_ () {
   tg_log.logInfo ("TrafficGuard config");
   tg_log.logInfo ("  -- LandingPage = %s",
                   config_root["LandingPage"].asString ().c_str ());
+  tg_log.logInfo ("  -- Workers     = %d",
+                  config_root["Workers"].asInt () < 2 ? 2 :
+                    config_root["Workers"].asInt ());
 
   return true;
 }

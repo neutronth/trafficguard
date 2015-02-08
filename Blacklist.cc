@@ -18,10 +18,50 @@ using std::size_t;
 namespace TrafficGuard
 {
 
-Blacklist::Blacklist (string base_path, atomic<bool> *ready)
-  : base_path_ (base_path), ready_ (ready)
+Blacklist::Blacklist (string base_path, atomic<bool> *ready, matchCallback cb,
+                      int workers)
+  : base_path_ (base_path), ready_ (ready), worker_queue_size_ (0),
+    worker_queue_ (256), match_callback_ (cb)
 {
   LoadPatterns ();
+
+  int workers_ = workers < 2 ? 2 : workers;
+
+  for (; workers_ > 0; workers_--)
+    {
+      thread worker (&Blacklist::MatchWorker, this, workers_);
+      worker.detach ();
+    }
+}
+
+void
+Blacklist::MatchWorker (int id)
+{
+  tg_log.logInfo ("Blacklist worker id=%d created...", id);
+  while (true)
+    {
+      unique_lock<mutex> lk (worker_mtx_);
+      Transaction *transaction = NULL;
+
+      worker_cv_.wait (lk, [this]{return worker_queue_size_ > 0;});
+
+      if (worker_queue_.pop (transaction))
+        {
+          worker_queue_size_--;
+          string blacklist_categories;
+
+          if (Match (transaction->getClientRequest ().getUrl ().getHost (),
+                     transaction->getClientRequest ().getUrl ().getUrlString (),
+                     blacklist_categories))
+            {
+              match_callback_ (std::ref (*transaction), blacklist_categories);
+            }
+          else
+            {
+              transaction->resume ();
+            }
+        }
+    }
 }
 
 void
@@ -67,6 +107,22 @@ Blacklist::ReloadPatterns ()
     {
       tg_log.logInfo ("!!! No blacklist activated !!!");
     }
+}
+
+bool
+Blacklist::MatchQueueAdd (Transaction &transaction)
+{
+  if (worker_queue_.push (&transaction))
+    {
+      worker_queue_size_++;
+
+      std::unique_lock<std::mutex> lk (worker_mtx_);
+      worker_cv_.notify_all ();
+
+      return true;
+    }
+
+  return false;
 }
 
 bool
@@ -142,13 +198,6 @@ BlacklistCategory::LoadPatterns (string type)
           regex_patterns.append ("(");
           regex_patterns.append (line);
           regex_patterns.append (")|");
-
-          if ((++count % 1000) == 0)
-            {
-              ProcessPatterns (type, regex_patterns);
-              count = 0;
-              regex_patterns.clear ();
-            }
         }
 
       if (regex_patterns.size () > 0)
