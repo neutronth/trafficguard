@@ -8,6 +8,7 @@
 #include <pcrecpp.h>
 #include <condition_variable>
 #include <mutex>
+#include <functional>
 #include <boost/lockfree/queue.hpp>
 #include <atscppapi/Logger.h>
 #include <atscppapi/TransactionPlugin.h>
@@ -79,12 +80,11 @@ BlacklistCategory::~BlacklistCategory ()
   tg_log.logDebug ("Category: %s destroyed", name_.c_str ());
 }
 
-typedef void (*matchCallback) (Transaction &, string);
-
 class Blacklist
 {
 public:
-  Blacklist (string base_path, atomic<bool> *ready, matchCallback cb,
+  Blacklist (string base_path, atomic<bool> *ready,
+             std::function<void (Transaction &, string)> cb,
              int workers);
   ~Blacklist ();
 
@@ -104,7 +104,7 @@ private:
   condition_variable worker_cv_;
   atomic<int>        worker_queue_size_;
   queue<const Transaction *> worker_queue_;
-  matchCallback      match_callback_;
+  std::function<void (Transaction &, string)> match_callback_;
 };
 
 inline

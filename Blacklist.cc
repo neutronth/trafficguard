@@ -18,7 +18,8 @@ using std::size_t;
 namespace TrafficGuard
 {
 
-Blacklist::Blacklist (string base_path, atomic<bool> *ready, matchCallback cb,
+Blacklist::Blacklist (string base_path, atomic<bool> *ready,
+                      std::function<void (Transaction &, string)> cb,
                       int workers)
   : base_path_ (base_path), ready_ (ready), worker_queue_size_ (0),
     worker_queue_ (256), match_callback_ (cb)

@@ -65,15 +65,6 @@ TrafficGuardTransactionPlugin::handleSendResponseHeaders (Transaction &transacti
   transaction.resume ();
 }
 
-static
-void
-blacklistMatchCallback (Transaction &transaction, string blacklist_categories)
-{
-  transaction.addPlugin (new TrafficGuardTransactionPlugin (transaction,
-                         config_root["LandingPage"].asString (),
-                         blacklist_categories));
-}
-
 class TrafficGuardGlobalPlugin : public GlobalPlugin
 {
 public:
@@ -82,9 +73,15 @@ public:
       base_path_ ("/etc/trafficguard/blacklists"),
       ready_ (false)
   {
+    auto cb = [] (Transaction &transaction, string blacklist_categories)
+      {
+        transaction.addPlugin (new TrafficGuardTransactionPlugin (transaction,
+                               config_root["LandingPage"].asString (),
+                               blacklist_categories));
+      };
+
     blacklist_ = make_shared<Blacklist> (base_path_, &ready_,
-                                         &blacklistMatchCallback,
-                                         config_root["Workers"].asInt ());
+                                         cb, config_root["Workers"].asInt ());
     registerHook (HOOK_SEND_REQUEST_HEADERS);
   }
 
