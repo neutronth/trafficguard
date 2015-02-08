@@ -121,7 +121,7 @@ readConfig_ () {
   tg_log.logInfo ("  -- LandingPage = %s",
                   config_root["LandingPage"].asString ().c_str ());
   tg_log.logInfo ("  -- Workers     = %d",
-                  config_root["Workers"].asInt () < 2 ? 2 :
+                  config_root["Workers"].asInt () < 1 ? 1 :
                     config_root["Workers"].asInt ());
 
   return true;

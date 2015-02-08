@@ -25,7 +25,7 @@ Blacklist::Blacklist (string base_path, atomic<bool> *ready, matchCallback cb,
 {
   LoadPatterns ();
 
-  int workers_ = workers < 2 ? 2 : workers;
+  int workers_ = workers < 1 ? 1 : workers;
 
   for (; workers_ > 0; workers_--)
     {
@@ -48,6 +48,8 @@ Blacklist::MatchWorker (int id)
       if (worker_queue_.pop (transaction))
         {
           worker_queue_size_--;
+          lk.unlock ();
+
           string blacklist_categories;
 
           if (Match (transaction->getClientRequest ().getUrl ().getHost (),
