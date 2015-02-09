@@ -1,4 +1,7 @@
+SUBDIRS = pcrecpp
+
 AM_CPPFLAGS = -I$(top_srcdir)/lib/atscppapi/src/include \
+	-I./pcrecpp \
   -Wno-unused-variable \
   -std=c++11
 target = TrafficGuard.so
@@ -12,9 +15,9 @@ TrafficGuard_la_SOURCES = \
 
 TrafficGuard_la_LDFLAGS = -module -avoid-version -shared \
   -L$(top_srcdir)/lib/atscppapi/src/ \
+  -L./pcrecpp/ -lpcrecpp \
   -latscppapi \
   -lpthread \
-  -lpcrecpp \
   -ljsoncpp
 
 all:
