@@ -9,9 +9,11 @@
 #include <condition_variable>
 #include <mutex>
 #include <functional>
-#include <boost/lockfree/queue.hpp>
+#include <queue>
 #include <atscppapi/Logger.h>
 #include <atscppapi/TransactionPlugin.h>
+
+#include "TransactionHolder.h"
 
 using namespace atscppapi;
 using namespace pcrecpp;
@@ -22,7 +24,8 @@ using std::vector;
 using std::unique_lock;
 using std::mutex;
 using std::condition_variable;
-using boost::lockfree::queue;
+using std::function;
+using std::queue;
 
 namespace TrafficGuard
 {
@@ -83,13 +86,11 @@ BlacklistCategory::~BlacklistCategory ()
 class Blacklist
 {
 public:
-  Blacklist (string base_path, atomic<bool> *ready,
-             std::function<void (Transaction &, string)> cb,
-             int workers);
+  Blacklist (string base_path, atomic<bool> *ready, int workers);
   ~Blacklist ();
 
   void LoadPatterns ();
-  bool MatchQueueAdd (Transaction &transaction);
+  bool MatchQueueAdd (shared_ptr<TransactionHolder> transaction_holder);
 
 private:
   void ReloadPatterns ();
@@ -101,10 +102,9 @@ private:
   atomic<bool> *ready_;
   vector<shared_ptr<BlacklistCategory>> categories_;
   mutex              worker_mtx_;
+  mutex              queue_mtx_;
   condition_variable worker_cv_;
-  atomic<int>        worker_queue_size_;
-  queue<const Transaction *> worker_queue_;
-  std::function<void (Transaction &, string)> match_callback_;
+  queue<shared_ptr<TransactionHolder>> worker_queue_;
 };
 
 inline

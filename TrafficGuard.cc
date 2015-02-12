@@ -11,6 +11,7 @@
 #include <jsoncpp/json/json.h>
 
 #include "Blacklist.h"
+#include "TransactionHolder.h"
 
 using namespace atscppapi;
 using namespace TrafficGuard;
@@ -30,15 +31,10 @@ class TrafficGuardTransactionPlugin : public TransactionPlugin
 {
 public:
   TrafficGuardTransactionPlugin (Transaction &transaction,
-                                 string location, string category)
-    : TransactionPlugin (transaction), location_ (location),
+                                 string landingpage, string category)
+    : TransactionPlugin (transaction), location_ (landingpage),
       category_ (category)
   {
-    tg_log.logInfo ("Request: %s %s [Category: %s]",
-      utils::getIpString (transaction.getClientAddress ()).c_str (),
-      transaction.getClientRequest ().getUrl ().getUrlString ().c_str (),
-      category_.c_str ());
-
     TransactionPlugin::registerHook (HOOK_SEND_RESPONSE_HEADERS);
     transaction.error ();
   }
@@ -48,11 +44,17 @@ public:
 private:
   string location_;
   string category_;
+  shared_ptr<TransactionHolder> transaction_holder_;
 };
 
 void
 TrafficGuardTransactionPlugin::handleSendResponseHeaders (Transaction &transaction)
 {
+  tg_log.logInfo ("Request: %s %s [Category: %s]",
+    utils::getIpString (transaction.getClientAddress ()).c_str (),
+    transaction.getClientRequest ().getUrl ().getUrlString ().c_str (),
+    category_.c_str ());
+
   transaction.getClientResponse ().setStatusCode (HTTP_STATUS_MOVED_TEMPORARILY);
   transaction.getClientResponse ().setReasonPhrase ("Moved Temporarily");
 
@@ -61,9 +63,25 @@ TrafficGuardTransactionPlugin::handleSendResponseHeaders (Transaction &transacti
     << "&origin=" << transaction.getClientRequest ().getUrl ().getUrlString ();
 
 
-  transaction.getClientResponse ().getHeaders ()["Location"] = full_location.str (); 
+  transaction.getClientResponse ().getHeaders ()["Location"] = full_location.str ();
   transaction.resume ();
 }
+
+class TransactionStatePlugin : public TransactionPlugin
+{
+public:
+  TransactionStatePlugin (Transaction &transaction,
+                          shared_ptr<TransactionHolder> holder)
+    : TransactionPlugin (transaction), transaction_holder_ (holder) {}
+
+  ~TransactionStatePlugin ()
+  {
+    transaction_holder_->destroy ();
+  }
+
+private:
+  shared_ptr<TransactionHolder> transaction_holder_;
+};
 
 class TrafficGuardGlobalPlugin : public GlobalPlugin
 {
@@ -73,15 +91,8 @@ public:
       base_path_ ("/etc/trafficguard/blacklists"),
       ready_ (false)
   {
-    auto cb = [] (Transaction &transaction, string blacklist_categories)
-      {
-        transaction.addPlugin (new TrafficGuardTransactionPlugin (transaction,
-                               config_root["LandingPage"].asString (),
-                               blacklist_categories));
-      };
-
     blacklist_ = make_shared<Blacklist> (base_path_, &ready_,
-                                         cb, config_root["Workers"].asInt ());
+                                         config_root["Workers"].asInt ());
     registerHook (HOOK_SEND_REQUEST_HEADERS);
   }
 
@@ -96,10 +107,41 @@ private:
 void
 TrafficGuardGlobalPlugin::handleSendRequestHeaders (Transaction &transaction)
 {
-  string blacklist_categories;
+  if (ready_)
+    {
+      auto cb = [] (shared_ptr<TransactionHolder> transaction_holder,
+                    string blacklist_category)
+      {
+        shared_ptr<TransactionHolder> holder (transaction_holder);
+        if (!holder->isDestroy ())
+          {
+            Transaction *transaction = holder->getTransaction ();
 
-  if (!ready_ || !blacklist_->MatchQueueAdd (transaction))
-    transaction.resume ();
+            if (blacklist_category.length () == 0)
+              {
+                transaction->resume ();
+                return;
+              }
+
+            transaction->addPlugin (new TrafficGuardTransactionPlugin (
+                                      *transaction,
+                                      config_root["LandingPage"].asString (),
+                                      blacklist_category));
+          }
+      };
+
+      shared_ptr<TransactionHolder> transaction_holder (new TransactionHolder (transaction, cb));
+      transaction.addPlugin (new TransactionStatePlugin (transaction, transaction_holder));
+
+      if (!blacklist_->MatchQueueAdd (transaction_holder))
+        {
+          transaction.resume ();
+        }
+    }
+  else
+    {
+      transaction.resume ();
+    }
 }
 
 static bool

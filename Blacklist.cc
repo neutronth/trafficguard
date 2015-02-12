@@ -14,15 +14,13 @@ using std::ifstream;
 using std::string;
 using std::getline;
 using std::size_t;
+using std::lock_guard;
 
 namespace TrafficGuard
 {
 
-Blacklist::Blacklist (string base_path, atomic<bool> *ready,
-                      std::function<void (Transaction &, string)> cb,
-                      int workers)
-  : base_path_ (base_path), ready_ (ready), worker_queue_size_ (0),
-    worker_queue_ (256), match_callback_ (cb)
+Blacklist::Blacklist (string base_path, atomic<bool> *ready, int workers)
+  : base_path_ (base_path), ready_ (ready)
 {
   LoadPatterns ();
 
@@ -42,27 +40,33 @@ Blacklist::MatchWorker (int id)
   while (true)
     {
       unique_lock<mutex> lk (worker_mtx_);
-      Transaction *transaction = NULL;
+      worker_cv_.wait (lk, [this] {return !worker_queue_.empty ();});
 
-      worker_cv_.wait (lk, [this]{return worker_queue_size_ > 0;});
+      shared_ptr<TransactionHolder> holder;
 
-      if (worker_queue_.pop (transaction))
+      {
+        lock_guard<mutex> lock (queue_mtx_);
+
+        if (!worker_queue_.empty ())
+          {
+            holder = worker_queue_.front ();
+            worker_queue_.pop ();
+          }
+      }
+
+      Transaction *transaction = holder->getTransaction ();
+
+      string blacklist_category;
+
+      if (Match (transaction->getClientRequest ().getUrl ().getHost (),
+                 transaction->getClientRequest ().getUrl ().getUrlString (),
+                 blacklist_category))
         {
-          worker_queue_size_--;
-          lk.unlock ();
-
-          string blacklist_categories;
-
-          if (Match (transaction->getClientRequest ().getUrl ().getHost (),
-                     transaction->getClientRequest ().getUrl ().getUrlString (),
-                     blacklist_categories))
-            {
-              match_callback_ (std::ref (*transaction), blacklist_categories);
-            }
-          else
-            {
-              transaction->resume ();
-            }
+          holder->getCallback () (holder, blacklist_category);
+        }
+      else
+        {
+          holder->getCallback () (holder, "");
         }
     }
 }
@@ -113,19 +117,20 @@ Blacklist::ReloadPatterns ()
 }
 
 bool
-Blacklist::MatchQueueAdd (Transaction &transaction)
+Blacklist::MatchQueueAdd (shared_ptr<TransactionHolder> transaction_holder)
 {
-  if (worker_queue_.push (&transaction))
-    {
-      worker_queue_size_++;
+  {
+    lock_guard<mutex> lock (queue_mtx_);
+    if (worker_queue_.size () < 256)
+      worker_queue_.push (transaction_holder);
+    else
+      return false;
+  }
 
-      std::unique_lock<std::mutex> lk (worker_mtx_);
-      worker_cv_.notify_all ();
+  std::unique_lock<mutex> lk (worker_mtx_);
+  worker_cv_.notify_all ();
 
-      return true;
-    }
-
-  return false;
+  return true;
 }
 
 bool
@@ -180,7 +185,7 @@ BlacklistCategory::UrlMatch (string text)
 void
 BlacklistCategory::LoadPatterns (string type)
 {
-  string path (base_path_); 
+  string path (base_path_);
   path.append ("/");
   path.append (name_);
   path.append ("/");
