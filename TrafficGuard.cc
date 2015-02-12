@@ -3,6 +3,7 @@
 #include <fstream>
 #include <memory>
 #include <atomic>
+#include <unordered_map>
 #include <atscppapi/GlobalPlugin.h>
 #include <atscppapi/TransactionPlugin.h>
 #include <atscppapi/Logger.h>
@@ -21,6 +22,7 @@ using std::shared_ptr;
 using std::make_shared;
 using std::atomic;
 using std::ifstream;
+using std::unordered_map;
 
 namespace TrafficGuard {
   Logger tg_log;
@@ -169,12 +171,22 @@ readConfig_ () {
 void
 TSPluginInit (int argc ATSCPPAPI_UNUSED, const char *argv[] ATSCPPAPI_UNUSED)
 {
-  tg_log.init ("trafficguard", true, true, Logger::LOG_LEVEL_DEBUG, false, 0);
-
-  tg_log.logInfo ("TrafficGuard starting");
 
   if (readConfig_ ())
     {
+      unordered_map<string, function<Logger::LogLevel ()>> loglevel_map;
+
+      loglevel_map["nolog"] = [] () { return Logger::LOG_LEVEL_NO_LOG; };
+      loglevel_map["error"] = [] () { return Logger::LOG_LEVEL_ERROR;  };
+      loglevel_map["info"]  = [] () { return Logger::LOG_LEVEL_INFO;   };
+      loglevel_map["debug"] = [] () { return Logger::LOG_LEVEL_DEBUG;  };
+
+      auto loglevel_get = loglevel_map[config_root["LogLevel"].asString ()];
+      auto loglevel = loglevel_get ? loglevel_get () : loglevel_map["info"] ();
+
+      tg_log.init ("trafficguard", true, true, loglevel, false, 0);
+      tg_log.logInfo ("TrafficGuard starting");
+
       new TrafficGuardGlobalPlugin ();
     }
 }
