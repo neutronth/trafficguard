@@ -11,8 +11,7 @@ TrafficGuard_la_SOURCES = \
   Blacklist.cc
 
 TrafficGuard_la_LDFLAGS = -module -avoid-version -shared \
-  -L$(top_srcdir)/lib/atscppapi/src/ \
-  -latscppapi \
+  -L/usr/lib/trafficserver/ -latscppapi \
   -lpthread \
   -lpcrecpp \
   -ljsoncpp
