@@ -55,6 +55,10 @@ Blacklist::MatchWorker (int id)
       }
 
       Transaction *transaction = holder->getTransaction ();
+      ScopedSharedMutexLock lock (holder->getMutex ());
+
+      if (holder->isTransactionDestroyed ())
+        continue;
 
       string blacklist_category;
 
