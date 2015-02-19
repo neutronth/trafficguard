@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <atscppapi/GlobalPlugin.h>
 #include <atscppapi/TransactionPlugin.h>
+#include <atscppapi/InterceptPlugin.h>
 #include <atscppapi/Logger.h>
 #include <atscppapi/PluginInit.h>
 #include <atscppapi/utils.h>
@@ -96,19 +97,50 @@ TrafficGuardTransactionPlugin::handleSendResponseHeaders (Transaction &transacti
   transaction.resume ();
 }
 
+class TrafficGuardPatternsReloadIntercept : public InterceptPlugin
+{
+public:
+  TrafficGuardPatternsReloadIntercept (Transaction &transaction) :
+    InterceptPlugin (transaction, InterceptPlugin::TRANSACTION_INTERCEPT) {}
+
+  void consume (const string &data, InterceptPlugin::RequestDataType type);
+  void handleInputComplete ();
+
+  ~TrafficGuardPatternsReloadIntercept () {}
+};
+
+void
+TrafficGuardPatternsReloadIntercept::consume (
+  const string &data ATSCPPAPI_UNUSED,
+  InterceptPlugin::RequestDataType type ATSCPPAPI_UNUSED)
+{
+  /* Do nothing */
+}
+
+void
+TrafficGuardPatternsReloadIntercept::handleInputComplete ()
+{
+  string response("HTTP/1.1 200 OK\r\n"
+                  "\r\n");
+  InterceptPlugin::produce(response);
+  InterceptPlugin::setOutputComplete();
+}
+
 class TrafficGuardGlobalPlugin : public GlobalPlugin
 {
 public:
   TrafficGuardGlobalPlugin ()
-    : blacklist_ (NULL),
-      base_path_ ("/etc/trafficguard/blacklists"),
+    : GlobalPlugin (true),
+      blacklist_ (NULL), base_path_ ("/etc/trafficguard/blacklists"),
       ready_ (false)
   {
     blacklist_ = make_shared<Blacklist> (base_path_, &ready_,
                                          config_root["Workers"].asInt ());
+    registerHook (HOOK_READ_REQUEST_HEADERS_PRE_REMAP);
     registerHook (HOOK_SEND_REQUEST_HEADERS);
   }
 
+  void handleReadRequestHeadersPreRemap (Transaction &transaction);
   void handleSendRequestHeaders (Transaction &transaction);
 
 private:
@@ -116,6 +148,31 @@ private:
   string       base_path_;
   atomic<bool> ready_;
 };
+
+void
+TrafficGuardGlobalPlugin::handleReadRequestHeadersPreRemap (Transaction &transaction)
+{
+
+  if (transaction.getClientRequest ().getMethod () == HTTP_METHOD_PURGE)
+    {
+      string clientip = utils::getIpString (transaction.getClientAddress ());
+      if (clientip != "127.0.0.1")
+        {
+          transaction.resume ();
+          return;
+        }
+
+      string url = transaction.getClientRequest ().getUrl ().getUrlString ();
+      if (url.find ("/trafficguard/patterns") != std::string::npos)
+        {
+          tg_log.logInfo ("Reload patterns...");
+          blacklist_->LoadPatterns ();
+          transaction.addPlugin (new TrafficGuardPatternsReloadIntercept (transaction));
+        }
+    }
+
+  transaction.resume ();
+}
 
 void
 TrafficGuardGlobalPlugin::handleSendRequestHeaders (Transaction &transaction)
